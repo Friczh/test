@@ -1,0 +1,95 @@
+name: Build and publish Docker image
+
+# Builds the image defined by ./Dockerfile and pushes it to GitHub
+# Container Registry (ghcr.io) -- no separate registry account/secret
+# needed, GHCR accepts the repo's own built-in GITHUB_TOKEN as long as
+# this workflow is granted `packages: write` below.
+#
+# Triggers:
+#   - push to main: rebuilds `:latest` (and a `:<short-sha>` tag) on every
+#     merge, so "docker compose pull && docker compose up -d" always picks
+#     up the newest code.
+#   - a pushed tag like `v1.2.3`: also publishes `:1.2.3`, `:1.2`, `:1` --
+#     use this when you want to hand your friend a specific, pinned
+#     version instead of a moving `:latest`.
+#   - workflow_dispatch: manual "Run workflow" button, for a rebuild
+#     without a new commit (e.g. after ffmpeg-static/bgutil-pot upstream
+#     releases a fix, since neither is pinned to a lockfile hash here).
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  # Lower-cased below via docker/metadata-action -- GHCR rejects any
+  # uppercase in the image path, and `github.repository` preserves
+  # whatever case the account/repo name actually has. `-render` suffix
+  # keeps this separate from the friend-facing production image
+  # (ghcr.io/OWNER/REPO) if this ever gets pushed to the same repo --
+  # this build includes the Render health-check server the production
+  # one deliberately doesn't carry.
+  IMAGE_NAME: ${{ github.repository }}-render
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Derives tags/labels from the git ref -- e.g. a push to main
+      # produces `latest` + `main-<short-sha>`; a pushed tag `v1.2.3`
+      # additionally produces `1.2.3`, `1.2`, `1`. Also normalizes
+      # IMAGE_NAME to lowercase, which GHCR requires.
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short,prefix=main-,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Single-platform (linux/amd64) on purpose -- the Dockerfile
+          # already pins to a specific glibc floor (debian:bookworm-slim,
+          # see its own comments re: bgutil-pot's glibc >= 2.34
+          # requirement) and this is meant for one specific x86_64
+          # Debian host, not general distribution. Add
+          # linux/arm64 here (and switch to QEMU emulation or an
+          # arm64 runner) only if that host ever changes.
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image summary
+        run: |
+          echo "### Published image" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
