@@ -377,6 +377,26 @@ class GuildPlayer {
       if (stage1 && !stage1.destroyed) stage1.destroy(err);
     });
 
+    // TEMP DIAGNOSTIC: confirm whether nodeStream ever delivers bytes at
+    // all. If total stays 0 for the whole track, the SABR/direct fetch
+    // loop itself is stalling silently (no 'error' emitted) -- rules out
+    // demux/prebuffer as the cause.
+    let _diagBytes = 0;
+    let _diagChunks = 0;
+    nodeStream.on('data', (chunk) => {
+      _diagBytes += chunk.length;
+      _diagChunks += 1;
+      if (_diagChunks === 1) {
+        console.warn(`[player:${this.guildId}] DIAG first chunk for ${track.videoId}: ${chunk.length} bytes (source: ${usedSabr ? 'SABR' : 'direct'})`);
+      }
+    });
+    nodeStream.on('end', () => {
+      console.warn(`[player:${this.guildId}] DIAG stream end for ${track.videoId}: total ${_diagBytes} bytes / ${_diagChunks} chunks`);
+    });
+    setTimeout(() => {
+      console.warn(`[player:${this.guildId}] DIAG 8s mark for ${track.videoId}: ${_diagBytes} bytes / ${_diagChunks} chunks received so far`);
+    }, 8000).unref();
+
     let result;
     try {
       const bitrateBps = format.bitrate > 0 ? format.bitrate : config.assumedBitrateBps;
