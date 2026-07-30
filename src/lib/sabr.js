@@ -56,6 +56,9 @@ function chooseAudioFormat(formats, preferredItag) {
  * @param {import('youtubei.js').VideoInfo | import('youtubei.js').TrackInfo} info
  *   Result of session.getInfo()/session.music.getInfo() -- same `info`
  *   object the direct-download path already has, no extra fetch needed.
+ * @param {import('youtubei.js').Innertube} session
+ *   The Innertube wrapper -- needed for session.session.player.decipher()
+ *   to transform server_abr_streaming_url's n-sig before use.
  * @param {{ clientName: number, clientVersion: string }} clientInfo
  *   From innertube.js's getSabrClientInfo(session, clientType).
  * @param {string} poToken
@@ -85,14 +88,31 @@ function chooseAudioFormat(formats, preferredItag) {
  *   this on any downstream failure or track skip, or the fetch loop
  *   keeps running/fetching after nothing is consuming it.
  */
-async function buildSabrAudioStream(info, clientInfo, poToken, { preferredItag } = {}) {
+async function buildSabrAudioStream(info, session, clientInfo, poToken, { preferredItag } = {}) {
   const streamingData = info.streaming_data;
-  const serverAbrStreamingUrl = streamingData?.server_abr_streaming_url;
-  if (!serverAbrStreamingUrl) {
+  const rawServerAbrStreamingUrl = streamingData?.server_abr_streaming_url;
+  if (!rawServerAbrStreamingUrl) {
     throw new Error(
       'buildSabrAudioStream: no server_abr_streaming_url on streaming_data -- not a SABR-eligible response, fallback does not apply here'
     );
   }
+
+  // CRITICAL: server_abr_streaming_url carries the same n-sig cipher as
+  // regular adaptive_formats URLs and MUST be deciphered before use --
+  // confirmed against the googlevideo/shaka-player reference integration
+  // (LuanRT/sabr-shaka-example, main.ts), which calls
+  // `session.player.decipher(streaming_data.server_abr_streaming_url)`
+  // before handing the URL to SabrStream. youtubei.js's Player.decipher()
+  // reads the `n` query param and runs it through the player's nsig
+  // transform (core/Player.js); skipping this leaves a stale/invalid `n`
+  // on the URL, which the CDN rejects outright -- this was the actual
+  // cause of the "SabrStream Maximum retries exceeded: Server returned
+  // 403 Forbidden" production failure, not a token or IP issue.
+  // session.player.decipher() is on the real Session object, reached via
+  // the public `.session` getter on the Innertube wrapper class -- see
+  // the po_token-mutation note above for why `session.session` (not
+  // `session`) is required here.
+  const serverAbrStreamingUrl = await session.session.player.decipher(rawServerAbrStreamingUrl);
 
   // NOT nested inside streaming_data -- confirmed against installed
   // youtubei.js source (parser/parser.js line ~296 + core/mixins/

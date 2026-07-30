@@ -329,6 +329,7 @@ class GuildPlayer {
         const clientInfo = getSabrClientInfo(session, track.isMusic ? 'YTMUSIC' : 'WEB');
         const { audioStream: sabrWebStream, format: sabrFormat, abort } = await buildSabrAudioStream(
           info,
+          session,
           clientInfo,
           poToken,
           { preferredItag: format.itag }
