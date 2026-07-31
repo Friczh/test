@@ -295,6 +295,24 @@ class GuildPlayer {
     // same fallback check below.
     let nodeStream;
     let usedSabr = false;
+    // The format ACTUALLY being streamed, used below for prebuffer sizing.
+    // Deliberately NOT always `format` -- when SABR fallback kicks in,
+    // sabr.js's chooseAudioFormat() only reuses `format.itag` if that
+    // exact itag happens to be present among the SABR-eligible formats;
+    // SABR-only responses frequently don't include it at all (that's
+    // often *why* SABR fallback triggered in the first place), so it
+    // silently picks a different itag with a different bitrate instead.
+    // Sizing the prebuffer from the wrong (direct-download) format's
+    // bitrate when that mismatch happens under/over-sizes the buffer for
+    // the bitrate actually arriving -- this was the root cause of the
+    // stutter/speedup/cutoff reports specific to SABR playback: once the
+    // network buffer under-fills relative to real playback rate,
+    // @discordjs/voice's own catch-up scheduling (it targets a fixed
+    // 20ms cadence and fires back-to-back with minimal delay once behind
+    // -- confirmed in node_modules/@discordjs/voice/dist/index.js's
+    // audioCycleStep) makes the recovery audibly sound like a speedup,
+    // not just a stall.
+    let streamFormat = format;
     // Only meaningful when usedSabr is true: whether the SABR-selected
     // format is Opus-coded, and therefore whether Phase 2 needs to route
     // through buildOpusPipeline() (plain WebM demux) or
@@ -356,6 +374,7 @@ class GuildPlayer {
         );
         nodeStream = Readable.fromWeb(sabrWebStream);
         usedSabr = true;
+        streamFormat = sabrFormat;
         // Set immediately, not after Phase 2 succeeds -- a failure
         // anywhere below (prebuffer, demux/transcode) still needs this
         // track's fetch loop stopped, and _playNext()'s next call
@@ -420,7 +439,7 @@ class GuildPlayer {
 
     let result;
     try {
-      const bitrateBps = format.bitrate > 0 ? format.bitrate : config.assumedBitrateBps;
+      const bitrateBps = streamFormat.bitrate > 0 ? streamFormat.bitrate : config.assumedBitrateBps;
       const prebufferTargetBytes = Math.max(
         1,
         Math.ceil((bitrateBps / 8) * config.prebufferSeconds)
