@@ -13,6 +13,12 @@ const { buildSabrAudioStream, chooseAudioFormat } = require('../src/lib/sabr');
 const CLIENT_INFO = { clientName: 67, clientVersion: '1.20250101.00.00' };
 const PO_TOKEN = 'fake-po-token';
 
+// Every test below throws on a guard clause that runs BEFORE
+// deriveSabrParams() ever touches `session` (see sabr.js for why that
+// ordering is required), so this only needs to exist to keep the call
+// signature correct -- it's never actually invoked in these tests.
+const MOCK_SESSION = { session: { player: { decipher: async (url) => url } } };
+
 function baseInfo(overrides = {}) {
   return {
     streaming_data: {
@@ -38,7 +44,7 @@ function baseInfo(overrides = {}) {
 test('buildSabrAudioStream: throws when streaming_data has no server_abr_streaming_url', async () => {
   const info = baseInfo({ streaming_data: { server_abr_streaming_url: undefined } });
   await assert.rejects(
-    () => buildSabrAudioStream(info, CLIENT_INFO, PO_TOKEN),
+    () => buildSabrAudioStream(info, MOCK_SESSION, CLIENT_INFO, PO_TOKEN),
     /no server_abr_streaming_url/
   );
 });
@@ -47,7 +53,7 @@ test('buildSabrAudioStream: throws when video_playback_ustreamer_config is missi
   const info = baseInfo();
   info.player_config.media_common_config.media_ustreamer_request_config.video_playback_ustreamer_config = undefined;
   await assert.rejects(
-    () => buildSabrAudioStream(info, CLIENT_INFO, PO_TOKEN),
+    () => buildSabrAudioStream(info, MOCK_SESSION, CLIENT_INFO, PO_TOKEN),
     /video_playback_ustreamer_config/
   );
 });
@@ -56,7 +62,7 @@ test('buildSabrAudioStream: throws when player_config itself is entirely absent'
   const info = baseInfo();
   delete info.player_config;
   await assert.rejects(
-    () => buildSabrAudioStream(info, CLIENT_INFO, PO_TOKEN),
+    () => buildSabrAudioStream(info, MOCK_SESSION, CLIENT_INFO, PO_TOKEN),
     /video_playback_ustreamer_config/
   );
 });
@@ -70,7 +76,7 @@ test('buildSabrAudioStream: throws when adaptive_formats has no video-type candi
     },
   });
   await assert.rejects(
-    () => buildSabrAudioStream(info, CLIENT_INFO, PO_TOKEN),
+    () => buildSabrAudioStream(info, MOCK_SESSION, CLIENT_INFO, PO_TOKEN),
     /no video-type format present/
   );
 });
@@ -78,7 +84,7 @@ test('buildSabrAudioStream: throws when adaptive_formats has no video-type candi
 test('buildSabrAudioStream: throws when adaptive_formats is entirely empty', async () => {
   const info = baseInfo({ streaming_data: { adaptive_formats: [] } });
   await assert.rejects(
-    () => buildSabrAudioStream(info, CLIENT_INFO, PO_TOKEN),
+    () => buildSabrAudioStream(info, MOCK_SESSION, CLIENT_INFO, PO_TOKEN),
     /no video-type format present/
   );
 });

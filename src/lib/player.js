@@ -332,7 +332,27 @@ class GuildPlayer {
           session,
           clientInfo,
           poToken,
-          { preferredItag: format.itag }
+          {
+            preferredItag: format.itag,
+            // Lets sabr.js reconnect transparently on a mid-stream
+            // RELOAD_PLAYER_RESPONSE or a recoverable stream-protection
+            // failure (stale video-bound PO token, see
+            // RECOVERABLE_SABR_ERROR_MESSAGES in sabr.js) instead of
+            // either surfacing as a normal stream error that ends the
+            // track early -- same getInfo()/session.music.getInfo()
+            // split used above, so the refetched info is shaped the same
+            // way as the original.
+            refetchInfo: () => (
+              track.isMusic ? session.music.getInfo(track.videoId) : session.getInfo(track.videoId)
+            ),
+            // Re-mints the VIDEO-bound token (distinct from the
+            // session-level visitor_data-bound one set on
+            // session.session.player.po_token above) -- this is what
+            // actually fixes the stale-token failure mode; reconnecting
+            // with refetchInfo alone but the same old token would just
+            // hit the identical error again.
+            refetchPoToken: () => getPoToken(track.videoId),
+          }
         );
         nodeStream = Readable.fromWeb(sabrWebStream);
         usedSabr = true;
