@@ -16,6 +16,7 @@ const PAGE_SIZE = 25;
 // 4096 chars for description, but the real fix is just not dumping the
 // whole queue into one message at all -- paginate it.
 const COLLECTOR_TIMEOUT_MS = 5 * 60 * 1000;
+const REFRESH_COOLDOWN_MS = 5000;
 
 function buildQueuePage(queue, tracks, page, totalPages) {
   const start = page * PAGE_SIZE;
@@ -46,7 +47,11 @@ function buildQueueRow(page, totalPages) {
       .setCustomId('queue_next')
       .setLabel('Next ▶')
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(page >= totalPages - 1)
+      .setDisabled(page >= totalPages - 1),
+    new ButtonBuilder()
+      .setCustomId('queue_refresh')
+      .setLabel('⟳ Refresh')
+      .setStyle(ButtonStyle.Secondary)
   );
 }
 
@@ -65,12 +70,13 @@ module.exports = {
         }
 
         let page = 0;
-        const totalPages = Math.max(1, Math.ceil(tracks.length / PAGE_SIZE));
+        let totalPages = Math.max(1, Math.ceil(tracks.length / PAGE_SIZE));
         const embed = buildQueuePage(queue, tracks, page, totalPages);
-        const components = totalPages > 1 ? [buildQueueRow(page, totalPages)] : [];
-
-        const response = await interaction.reply({ embeds: [embed], components, withResponse: true });
-        if (totalPages <= 1) return;
+        const response = await interaction.reply({
+          embeds: [embed],
+          components: [buildQueueRow(page, totalPages)],
+          withResponse: true,
+        });
 
         const message = response.resource?.message ?? await interaction.fetchReply();
         const collector = message.createMessageComponentCollector({
@@ -78,15 +84,33 @@ module.exports = {
           time: COLLECTOR_TIMEOUT_MS,
         });
 
+        let lastRefresh = Date.now();
         collector.on('collect', async (button) => {
           if (button.user.id !== interaction.user.id) {
-            await button.reply({ content: 'Only the person who ran this command can page through it.', ephemeral: true });
+            await button.reply({ content: 'Only the person who ran this command can control this.', ephemeral: true });
             return;
           }
-          page += button.customId === 'queue_next' ? 1 : -1;
+
+          if (button.customId === 'queue_refresh') {
+            const remainingMs = REFRESH_COOLDOWN_MS - (Date.now() - lastRefresh);
+            if (remainingMs > 0) {
+              await button.reply({ content: `Refresh is on cooldown, try again in ${(remainingMs / 1000).toFixed(1)}s.`, ephemeral: true });
+              return;
+            }
+            lastRefresh = Date.now();
+          } else {
+            page += button.customId === 'queue_next' ? 1 : -1;
+          }
+
+          // Re-derive from the live queue, not the values captured at
+          // command-invocation time -- the queue can change (tracks
+          // added/removed) between clicks, refresh most of all.
+          const freshTracks = queue.list();
+          totalPages = Math.max(1, Math.ceil(freshTracks.length / PAGE_SIZE));
           page = Math.max(0, Math.min(page, totalPages - 1));
+
           await button.update({
-            embeds: [buildQueuePage(queue, queue.list(), page, totalPages)],
+            embeds: [buildQueuePage(queue, freshTracks, page, totalPages)],
             components: [buildQueueRow(page, totalPages)],
           });
         });
